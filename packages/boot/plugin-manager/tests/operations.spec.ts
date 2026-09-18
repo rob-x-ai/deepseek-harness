@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { PassThrough } from 'node:stream'
 import { expect, it, onTestFinished, vi } from 'vitest'
-import { initProfile, readProfileManifest } from '@deepseek-ai/dsh-app-boot'
+import { DuplicateCorePackageError, initProfile, readProfileManifest } from '@deepseek-ai/dsh-app-boot'
 import { anchorPathSpec, runPluginCommand, runProfilePnpm, viewProfilePackage } from '../src/operations.ts'
 
 const command = vi.hoisted(() => ({ run: vi.fn<(...args: unknown[]) => ReturnType<typeof result>>() }))
@@ -70,6 +70,29 @@ it('can install without activation and bounds output while retaining the complet
   expect(readFileSync(outcome.logPath, 'utf8')).toBe('0123456789')
   expect(readProfileManifest('test', dir).dsh?.profile?.bundles).toEqual([])
   expect(command.run.mock.calls[0]?.[1]).toEqual(['add', join(context.cwd, 'extra')])
+})
+
+it.each([true, false])('rejects duplicate core dependencies before activation (activate: %s)', async (activateNewBundles) => {
+  const { home, dir, context } = fixture()
+  const name = '@deepseek-ai/dsh-tools'
+  const installedCore = join(home, 'node_modules', name)
+  mkdirSync(installedCore, { recursive: true })
+  writeFileSync(context.installAnchor, JSON.stringify({ dependencies: { [name]: '1' } }))
+  writeFileSync(join(installedCore, 'package.json'), JSON.stringify({ name, version: '1.0.0' }))
+  command.run.mockImplementationOnce(() => result(0, 'installed', () => {
+    install(dir, 'conflicting-bundle')
+    const bundle = join(dir, 'node_modules', 'conflicting-bundle')
+    const manifest = readProfileManifest('test', bundle)
+    manifest.dependencies = { [name]: '1' }
+    writeFileSync(join(bundle, 'package.json'), JSON.stringify(manifest))
+    const duplicate = join(bundle, 'node_modules', name)
+    mkdirSync(duplicate, { recursive: true })
+    writeFileSync(join(duplicate, 'package.json'), JSON.stringify({ name, version: '1.0.0' }))
+  }))
+  await expect(runProfilePnpm(context, ['add', 'conflicting-bundle'], {
+    execution: 'service', outputBytes: 100, activateNewBundles,
+  })).rejects.toThrow(DuplicateCorePackageError)
+  expect(readProfileManifest('test', dir).dsh?.profile?.bundles).toEqual([])
 })
 
 it.each([runPluginCommand, runProfilePnpm])('installs into the supplied application profile directory with %s', async (run) => {

@@ -124,6 +124,8 @@ const handle = await ctx.agents.create({
 
 最终适配器选择、分发与迭代失败以终止结束的形式到达并进入 `agent/request-error`；处理该失败的监听器返回 `{ kind: 'retry' }` 且不调用 `next()`，未被处理的失败则是终态。Middleware、结果处理、工具及其他扩展失败仍会抛出并直接关闭轮次——插件失败结束的是轮次，不是循环。取消后未分发的模型工具调用会收到合成的 `tool/call` 加 `ABORTED_BEFORE_DISPATCH` 结果对。[显式取消决策](../../../.agents/notes/implemented/architecture/2026-07-16-explicit-turn-cancellation.zh.md)拥有信号生命周期。
 
+循环会在提交包含工具请求的 assistant 消息前取得并保留 scheduler。如果 scheduler 不可用，流会记录为仅供日志使用的 `assistant/attempt`，轮次以 `TOOL_RUNTIME_SCHEDULER_UNAVAILABLE` 结束；之后的轮次不会携带未获响应的 assistant 调用。请求提交后，若 scheduler 内部失败，循环会等待已开始的工作结束，并在关闭轮次前为所有待处理请求补充错误结果。已记录的调用收到 `TOOL_OUTCOME_UNKNOWN`，提示重试前核实副作用；尚未开始的调用收到 `TOOL_NOT_STARTED`。已完成的结果保持不变，原始错误仍会结束轮次。带类型的 Harness 错误保留各自的错误码。
+
 </details>
 
 -----

@@ -1,0 +1,5 @@
+- insert:
+    - id: scheduler-unavailable-fixture
+      name: './unavailable.mjs'
+      config:
+        prompt: Exercise a missing tool scheduler before continuing this session.

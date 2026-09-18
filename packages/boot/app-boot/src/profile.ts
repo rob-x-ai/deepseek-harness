@@ -37,6 +37,7 @@ import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import type { DshPackageManifest } from '@deepseek-ai/dsh-package-manifest'
 import { resolve as resolvePackage, type Package as ResolvePackageManifest } from 'resolve.exports'
 import { loadOverlayPatches } from './index.ts'
+import { assertSharedCorePackages } from './profile-resolution/core-packages.ts'
 import {
   canonicalLinkPath,
   isPackagedExecutable,
@@ -572,6 +573,7 @@ export async function healProfilesModuleFallback(
   options: ProfileModuleFallbackOptions,
 ): Promise<ProfileResolutionGeneration> {
   const { installAnchor, profile, home = resolveDshHome(), materialize = true } = options
+  assertSharedCorePackages(installAnchor, profile?.dir, profile?.layers.map(layer => join(layer.packageDir, 'package.json')))
   const profilesDir = join(home, PROFILES_DIR)
   const modulesDir = join(profilesDir, 'node_modules')
   if (materialize) mkdirSync(modulesDir, { recursive: true })

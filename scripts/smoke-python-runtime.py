@@ -100,6 +100,12 @@ RESTART_SECOND_PROMPT = "Complete the second isolated Python SDK process turn."
 RESTART_SECOND_TEXT = "PROCESS_TWO_OK"
 RESTART_FIRST_SESSION_ID = "process-one"
 RESTART_SECOND_SESSION_ID = "process-two"
+SCHEDULER_FIRST_PROMPT = "Exercise a missing tool scheduler before continuing this session."
+SCHEDULER_SECOND_PROMPT = "Continue this session and reply with SCHEDULER_RECOVERY_OK."
+SCHEDULER_FINAL_TEXT = "SCHEDULER_RECOVERY_OK"
+SCHEDULER_PREPARE_PROMPT = "Exercise a scheduler failure while preparing two tool calls."
+SCHEDULER_PAIRING_PROMPT = "Continue after the failed tool batch and reply with SCHEDULER_PAIRING_OK."
+SCHEDULER_PAIRING_TEXT = "SCHEDULER_PAIRING_OK"
 SNAPSHOT_WORKFLOW_SCRIPT = (
     "phase('Delegate')\n"
     f"const reply = await agent('{SNAPSHOT_WORKFLOW_CHILD_PROMPT}', {{ label: 'workflow-child' }})\n"
@@ -127,6 +133,10 @@ RESTART_SNAPSHOT_DIRECTORY = (
 RESTART_SNAPSHOT_FILENAMES = (
     "result.json", "requests.json", "session.1.v3.jsonl", "session.2.v3.jsonl",
 )
+SCHEDULER_SNAPSHOT_DIRECTORY = (
+    Path(__file__).resolve().parent / "snapshots" / "python-sdk-single-exe" / "scheduler-recovery"
+)
+SCHEDULER_SNAPSHOT_FILENAMES = ("result.json", "requests.json")
 MCP_SERVER_SCRIPT = """\
 import json
 import os
@@ -311,7 +321,7 @@ def completion_chunks(body: dict[str, object]) -> list[dict[str, object]]:
         block for block in latest.get("content", [])
         if isinstance(block, dict) and block.get("type") == "tool_result"
     ]
-    if tool_results:
+    if tool_results and SCHEDULER_PAIRING_PROMPT not in message_text(latest.get("content")):
         result = tool_results[-1]
         call_id, tool_name = latest_tool_call(messages, result.get("tool_use_id"))
         tool_text = message_text(result.get("content"))
@@ -342,7 +352,7 @@ def completion_chunks(body: dict[str, object]) -> list[dict[str, object]]:
         block["text"]
         for message in reversed(messages)
         if isinstance(message, dict) and message.get("role") == "user"
-        for block in message.get("content", [])
+        for block in reversed(message.get("content", []))
         if isinstance(block, dict) and block.get("type") == "text"
     ]
     minimal_prompt = next((prompt for prompt in user_prompts if prompt == MINIMAL_PROMPT), None)
@@ -365,6 +375,10 @@ def completion_chunks(body: dict[str, object]) -> list[dict[str, object]]:
         MCP_PROMPT,
         RESTART_FIRST_PROMPT,
         RESTART_SECOND_PROMPT,
+        SCHEDULER_FIRST_PROMPT,
+        SCHEDULER_SECOND_PROMPT,
+        SCHEDULER_PREPARE_PROMPT,
+        SCHEDULER_PAIRING_PROMPT,
         PROFILE_PLUGIN_PROMPT,
     }
     prompt = next(
@@ -383,6 +397,36 @@ def completion_chunks(body: dict[str, object]) -> list[dict[str, object]]:
             {"code": "return await tools.snapshot_double({ value: 21 })",
              "description": "Call the configured Plugin tool"},
         )
+    if prompt == SCHEDULER_FIRST_PROMPT:
+        assert_advertised_tool(body, "snapshot_double")
+        return tool_call_chunks("call-scheduler-unavailable", "snapshot_double", {"value": 21})
+    if prompt == SCHEDULER_SECOND_PROMPT:
+        if any(
+            block.get("type") in ("tool_use", "tool_result")
+            for message in messages
+            for block in message.get("content", [])
+        ):
+            raise AssertionError("scheduler failure left a tool call or result in the next Messages request")
+        return text_chunks(SCHEDULER_FINAL_TEXT)
+    if prompt == SCHEDULER_PREPARE_PROMPT:
+        first = tool_call_chunks("call-scheduler-started", "snapshot_double", {"value": 21})
+        second = tool_call_chunks("call-scheduler-pending", "snapshot_double", {"value": 22})
+        return [*first[:-2], *[{**chunk, "index": 1} for chunk in second[1:4]], *first[-2:]]
+    if prompt == SCHEDULER_PAIRING_PROMPT:
+        calls_seen = []
+        for index, message in enumerate(messages):
+            calls = [block for block in message.get("content", []) if block.get("type") == "tool_use"]
+            if not calls:
+                continue
+            assert message["role"] == "assistant", message
+            following = messages[index + 1]
+            assert following["role"] == "user", following
+            results = following["content"][:len(calls)]
+            assert [block.get("tool_use_id") for block in results] == [call["id"] for call in calls], following
+            assert all(block.get("type") == "tool_result" and block.get("is_error") is True for block in results), following
+            calls_seen.extend(call["id"] for call in calls)
+        assert calls_seen == ["call-scheduler-started", "call-scheduler-pending"], calls_seen
+        return text_chunks(SCHEDULER_PAIRING_TEXT)
     if prompt == RESTART_FIRST_PROMPT:
         return text_chunks(RESTART_FIRST_TEXT)
     if prompt == RESTART_SECOND_PROMPT:
@@ -709,7 +753,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--scenario",
-        choices=("all", "sdk-default", "sdk-custom", "sdk-minimal", "sdk-minimal-in-history", "sdk-fs-search", "sdk-spawn-node", "sdk-mcp", "sdk-snapshot", "sdk-restart", "sdk-profile-plugin", "sdk-office", "sdk-live", "runner", "direct"),
+        choices=("all", "sdk-default", "sdk-custom", "sdk-minimal", "sdk-minimal-in-history", "sdk-fs-search", "sdk-spawn-node", "sdk-mcp", "sdk-snapshot", "sdk-scheduler-recovery", "sdk-restart", "sdk-profile-plugin", "sdk-office", "sdk-live", "runner", "direct"),
         default="all",
     )
     parser.add_argument("--exe", type=Path)
@@ -728,10 +772,10 @@ def main() -> None:
         parser.error("--scenario sdk-profile-plugin requires --installed-wheel")
     if args.installed_wheel:
         args.exe = assert_installed_wheel_environment()
-    if args.scenario in {"all", "sdk-custom", "sdk-minimal", "sdk-minimal-in-history", "sdk-fs-search", "sdk-spawn-node", "sdk-snapshot", "sdk-restart", "sdk-office", "runner", "direct"} and args.exe is None:
+    if args.scenario in {"all", "sdk-custom", "sdk-minimal", "sdk-minimal-in-history", "sdk-fs-search", "sdk-spawn-node", "sdk-snapshot", "sdk-scheduler-recovery", "sdk-restart", "sdk-office", "runner", "direct"} and args.exe is None:
         parser.error("--exe is required for custom, minimal, fs-search, spawn-node, snapshot, restart, office, runner, and direct scenarios")
-    if args.update_snapshots and args.scenario not in {"all", "sdk-minimal", "sdk-minimal-in-history", "sdk-snapshot", "sdk-restart"}:
-        parser.error("--update-snapshots requires --scenario sdk-minimal, sdk-minimal-in-history, sdk-snapshot, sdk-restart, or all")
+    if args.update_snapshots and args.scenario not in {"all", "sdk-minimal", "sdk-minimal-in-history", "sdk-snapshot", "sdk-scheduler-recovery", "sdk-restart"}:
+        parser.error("--update-snapshots requires --scenario sdk-minimal, sdk-minimal-in-history, sdk-snapshot, sdk-scheduler-recovery, sdk-restart, or all")
     if args.exe is not None and not args.exe.is_file():
         parser.error(f"runtime executable does not exist: {args.exe}")
 
@@ -777,6 +821,9 @@ def main() -> None:
         if args.scenario in {"all", "sdk-snapshot"}:
             assert args.exe is not None
             smoke_sdk_snapshot(model.url, args.exe.resolve(), args.update_snapshots)
+        if args.scenario in {"all", "sdk-scheduler-recovery"}:
+            assert args.exe is not None
+            smoke_sdk_scheduler_recovery(model.url, args.exe.resolve(), args.update_snapshots)
         if args.scenario in {"all", "sdk-restart"}:
             assert args.exe is not None
             smoke_sdk_restart_snapshot(model.url, args.exe.resolve(), args.update_snapshots)
@@ -1424,6 +1471,105 @@ def smoke_sdk_snapshot(base_url: str, executable: Path, update_snapshots: bool) 
         compare_snapshot_files(
             files, update_snapshots, ADVANCED_SNAPSHOT_DIRECTORY, ADVANCED_SNAPSHOT_FILENAMES,
         )
+
+
+def smoke_sdk_scheduler_recovery(base_url: str, executable: Path, update_snapshots: bool) -> None:
+    """Keep a failed tool attempt out of a continued session's Messages request."""
+    from deepseek_harness import DeepSeekHarness
+
+    with tempfile.TemporaryDirectory(prefix="dsh-sdk-scheduler-") as temporary:
+        root = Path(temporary).resolve()
+        dsh_home = root / "home"
+        sessions = dsh_home / "sessions"
+        patch = write_advanced_profile_patch(root, "scheduler.patch.yml", sessions)
+        fixture = Path(__file__).resolve().parents[1] / "snapshots/sdk/scheduler-unavailable-continue/unavailable.mjs"
+        fault_patch = write_profile_patch(root, "fault.patch.yml", sessions, [{"insert": [
+            {"id": "snapshot-tool", "name": (
+                Path(__file__).resolve().parent / "fixtures/python-snapshot-tool.mjs"
+            ).as_uri()},
+            {"id": "scheduler-unavailable-fixture", "name": fixture.as_uri(),
+             "config": {"prompt": SCHEDULER_FIRST_PROMPT, "preparePrompt": SCHEDULER_PREPARE_PROMPT}},
+        ]}])
+        request_start = len(MockModelHandler.requests)
+        with DeepSeekHarness(
+            provider="deepseek-official", model="smoke-model", cwd=str(root),
+            dsh_bin=str(executable), dsh_home=str(dsh_home), patches=(str(patch), str(fault_patch)),
+            env={"DSH_PERMISSION_MODE": "danger-full-access", "DSH_TELEMETRY_DISABLED": "1"},
+            api_key="sk-keyless-smoke", base_url=base_url, request_timeout_seconds=60,
+        ) as harness:
+            session = harness.start_session("scheduler-recovery")
+            first = session.run(SCHEDULER_FIRST_PROMPT)
+            second = session.run(SCHEDULER_SECOND_PROMPT)
+            third = session.run(SCHEDULER_PREPARE_PROMPT)
+            fourth = session.run(SCHEDULER_PAIRING_PROMPT)
+
+        requests = MockModelHandler.requests[request_start:]
+        assert len(requests) == 4, f"scheduler recovery expected 4 model requests, got {len(requests)}"
+        assert second.final_response == SCHEDULER_FINAL_TEXT, second.final_response
+        assert fourth.final_response == SCHEDULER_PAIRING_TEXT, fourth.final_response
+        attempts = [event for event in first.events if event.get("type") == "assistant/attempt"]
+        assert len(attempts) == 1, first.events
+        assert not any(event.get("type") in ("assistant/message", "tool/call", "tool/result")
+                       for event in first.events), first.events
+        first_end = next(event["data"] for event in first.events if event.get("type") == "turn/end")
+        error = first_end["reason"]["error"]
+        assert error["code"] == "TOOL_RUNTIME_SCHEDULER_UNAVAILABLE", error
+        assert "Consumer @deepseek-ai/dsh-tools:" in error["message"], error
+        assert "provider:" in error["message"], error
+        second_end = next(event["data"] for event in second.events if event.get("type") == "turn/end")
+        assert second_end["reason"] == {"kind": "completed"}, second_end
+        third_end = next(event["data"] for event in third.events if event.get("type") == "turn/end")
+        assert third_end["reason"]["kind"] == "error", third_end
+        assert third_end["reason"]["error"]["message"] == "Authored scheduler prepare failure", third_end
+        failed_tools = [event["data"] for event in third.events if event.get("type") == "tool/result"]
+        assert [result["error"]["code"] for result in failed_tools] == ["TOOL_OUTCOME_UNKNOWN", "TOOL_NOT_STARTED"], failed_tools
+        fourth_end = next(event["data"] for event in fourth.events if event.get("type") == "turn/end")
+        assert fourth_end["reason"] == {"kind": "completed"}, fourth_end
+        logs = read_session_logs(sessions)
+        assert set(logs) == {"scheduler-recovery"}, logs.keys()
+        persisted = logs["scheduler-recovery"]
+        assert [event for event in persisted if event.get("type") == "assistant/attempt"] == attempts
+        assert not any(event.get("type") in ("tool/call", "tool/result") and event["data"]["turn"] < 3
+                       for event in persisted)
+        assert len([event for event in persisted if event.get("type") == "assistant/message"]) == 3
+        assert [event["data"] for event in persisted if event.get("type") == "tool/result"] == failed_tools
+        for result in (first, second, third, fourth):
+            subscribed = [notification.payload["event"] for notification in result.notifications
+                          if notification.method == "session.event"]
+            assert subscribed == result.events, subscribed
+        evidence = {
+            "first": {
+                "finalResponse": first.final_response,
+                "eventTypes": [event["type"] for event in first.events],
+                "attempt": normalize_snapshot_value(attempts[0], []),
+                "turnEnd": safe_turn_end(first_end),
+            },
+            "second": {
+                "finalResponse": second.final_response,
+                "eventTypes": [event["type"] for event in second.events],
+                "turnEnd": second_end,
+            },
+            "third": {
+                "finalResponse": third.final_response,
+                "eventTypes": [event["type"] for event in third.events],
+                "toolResults": normalize_snapshot_value(failed_tools, []),
+                "turnEnd": safe_turn_end(third_end),
+            },
+            "fourth": {
+                "finalResponse": fourth.final_response,
+                "eventTypes": [event["type"] for event in fourth.events],
+                "turnEnd": fourth_end,
+            },
+        }
+        model_requests = [{
+            "model": request["model"],
+            "messages": minimal_snapshot_text(request["messages"], root),
+        } for request in requests]
+        files = {
+            "result.json": json.dumps(evidence, indent=2, ensure_ascii=False) + "\n",
+            "requests.json": json.dumps(model_requests, indent=2, ensure_ascii=False) + "\n",
+        }
+        compare_snapshot_files(files, update_snapshots, SCHEDULER_SNAPSHOT_DIRECTORY, SCHEDULER_SNAPSHOT_FILENAMES)
 
 
 def smoke_sdk_restart_snapshot(base_url: str, executable: Path, update_snapshots: bool) -> None:

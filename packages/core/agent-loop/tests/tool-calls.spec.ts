@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { createUserMessage, ToolCallId, StreamChunk  } from '@deepseek-ai/dsh-llm'
-import SessionStore, { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
+import SessionStore, { SessionEvent, SessionId, TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import ToolRuntime, { defineContentToolFixture, TOOL_ABORTED_BEFORE_DISPATCH, TOOL_RUNTIME_SCHEDULER, type PostToolDecision, type PreToolDecision } from '@deepseek-ai/dsh-tools'
@@ -646,6 +646,124 @@ describe('tool-call scheduler: abort handling', () => {
 })
 
 describe('tool-call scheduler: failure quiescence', () => {
+  it('retains the scheduler diagnosis if recording the failed attempt also fails', async (test) => {
+    const ctx = await harness(new MockAdapter([multiCall([{ id: 'missing', name: 'echo', args: {} }])]))
+    test.onTestFinished(() => ctx.fiber.dispose())
+    Reflect.set(ctx.tools, TOOL_RUNTIME_SCHEDULER, undefined)
+    const agent = await ctx.agentLoop.create(SessionId('scheduler-settlement-error'), { provider: 'mock', model: 'mock' })
+    const append = agent.session.append.bind(agent.session)
+    Reflect.set(agent.session, 'append', (...args: unknown[]): unknown => {
+      if (args[0] === 'assistant/attempt') throw new Error('cannot save attempt')
+      return Reflect.apply(append, undefined, args) as unknown
+    })
+    test.onTestFinished(() => { Reflect.deleteProperty(agent.session, 'append') })
+    const idle = waitForIdle(ctx, agent)
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }))
+    await idle
+    const ended = events(agent).findLast(event => event.type === 'turn/end')
+    const reason = ended?.data.reason
+    if (reason?.kind !== 'error') throw new Error('expected a failed turn')
+    expect(reason.error.message).toContain('Tool runtime scheduler is unavailable')
+    expect(reason.error.message).toContain('cannot save attempt')
+    expect(events(agent).filter(event => event.type === 'assistant/message' || event.type === 'tool/call')).toEqual([])
+  })
+
+  it('keeps an unavailable scheduler out of provider history and accepts a later turn', async (test) => {
+    const adapter = new MockAdapter([
+      multiCall([{ id: 'unavailable', name: 'echo', args: {} }]),
+      multiCall([{ id: 'retry', name: 'echo', args: {} }]),
+      textResponse('recovered'),
+    ])
+    const ctx = await harness(adapter)
+    test.onTestFinished(() => ctx.fiber.dispose())
+    const executed: string[] = []
+    ctx.tools.register(defineContentToolFixture({
+      name: 'echo', description: 'echo', parameters: {},
+      async execute(_args, exec) {
+        executed.push(exec.callId)
+        return [{ type: 'text', text: 'echoed' }]
+      },
+    }))
+    const scheduler = ctx.tools[TOOL_RUNTIME_SCHEDULER]
+    Reflect.set(ctx.tools, TOOL_RUNTIME_SCHEDULER, undefined)
+    const agent = await ctx.agentLoop.create(SessionId('scheduler-missing'), { provider: 'mock', model: 'mock' })
+    let idle = waitForIdle(ctx, agent)
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'first' }], source: { kind: 'user' } }))
+    await idle
+    expect(executed).toEqual([])
+    expect(events(agent).filter(event => event.type === 'assistant/message' || event.type === 'tool/call' || event.type === 'tool/result')).toEqual([])
+    expect(events(agent).filter(event => event.type === 'assistant/attempt')).toHaveLength(1)
+    expect(events(agent).findLast(event => event.type === 'turn/end')).toMatchObject({
+      data: { reason: { kind: 'error', error: { code: 'TOOL_RUNTIME_SCHEDULER_UNAVAILABLE' } } },
+    })
+    Reflect.set(ctx.tools, TOOL_RUNTIME_SCHEDULER, scheduler)
+    idle = waitForIdle(ctx, agent)
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'retry' }], source: { kind: 'user' } }))
+    await idle
+    expect(executed).toEqual(['retry'])
+    expect(adapter.requests[1]?.messages.flatMap(message => message.content.filter(block => block.type === 'tool-call'))).toEqual([])
+    expect(events(agent).findLast(event => event.type === 'turn/end')).toMatchObject({ data: { reason: { kind: 'completed' } } })
+  })
+
+  it('retains the captured scheduler when the service key changes after assistant commit', async (test) => {
+    const adapter = new MockAdapter([
+      multiCall([{ id: 'captured-1', name: 'echo', args: {} }, { id: 'captured-2', name: 'echo', args: {} }]),
+      textResponse('done'),
+    ])
+    const ctx = await harness(adapter)
+    test.onTestFinished(() => ctx.fiber.dispose())
+    ctx.tools.register(defineContentToolFixture({
+      name: 'echo', description: 'echo', parameters: {},
+      async execute() { return [{ type: 'text', text: 'echoed' }] },
+    }))
+    ctx.on('session/event', (_session, event) => {
+      if (event.type === 'assistant/message') Reflect.set(ctx.tools, TOOL_RUNTIME_SCHEDULER, undefined)
+    })
+    const agent = await ctx.agentLoop.create(SessionId('scheduler-captured'), { provider: 'mock', model: 'mock' })
+    const idle = waitForIdle(ctx, agent)
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }))
+    await idle
+    expect(events(agent).filter(event => event.type === 'tool/result')).toHaveLength(2)
+    expect(events(agent).findLast(event => event.type === 'turn/end')).toMatchObject({ data: { reason: { kind: 'completed' } } })
+  })
+
+  it('preserves completed results and settles started and unstarted calls before continuing', async (test) => {
+    const adapter = new MockAdapter([
+      multiCall([{ id: 'done', name: 'echo', args: {} }, { id: 'failed', name: 'echo', args: {} }, { id: 'skipped', name: 'echo', args: {} }]),
+      textResponse('recovered'),
+    ])
+    const ctx = await harness(adapter)
+    test.onTestFinished(() => ctx.fiber.dispose())
+    const executed: string[] = []
+    ctx.tools.register(defineContentToolFixture({
+      name: 'echo', description: 'echo', parameters: {},
+      async execute(_args, exec) {
+        executed.push(exec.callId)
+        return [{ type: 'text', text: 'echoed' }]
+      },
+    }))
+    const scheduler = ctx.tools[TOOL_RUNTIME_SCHEDULER]
+    const prepare = scheduler.prepare.bind(scheduler)
+    scheduler.prepare = (exec) => {
+      if (exec.callId === ToolCallId('failed')) throw new Error('scheduler failed')
+      return prepare(exec)
+    }
+    const agent = await ctx.agentLoop.create(SessionId('scheduler-recovery'), { provider: 'mock', model: 'mock' })
+    let idle = waitForIdle(ctx, agent)
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'first' }], source: { kind: 'user' } }))
+    await idle
+    const results = events(agent).filter(event => event.type === 'tool/result')
+    expect(executed).toEqual(['done'])
+    expect(results.map(event => event.data.message.source.callId)).toEqual(['done', 'failed', 'skipped'])
+    expect(results.map(event => event.data.error?.code)).toEqual([undefined, TOOL_OUTCOME_UNKNOWN, TOOL_NOT_STARTED])
+    expect(results[0]?.data.message.content).toMatchObject([{ isError: false, content: [{ text: 'echoed' }] }])
+    idle = waitForIdle(ctx, agent)
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'continue' }], source: { kind: 'user' } }))
+    await idle
+    expect(adapter.requests[1]?.messages.flatMap(message => message.content.filter(block => block.type === 'tool-result'))).toHaveLength(3)
+    expect(events(agent).findLast(event => event.type === 'turn/end')).toMatchObject({ data: { reason: { kind: 'completed' } } })
+  })
+
   it('stops new dispatches and drains started bodies before surfacing the first failure', async () => {
     const adapter = new MockAdapter([
       multiCall([

@@ -18,6 +18,7 @@ import type {
 import { agentEvents, assembleContextFor } from '@deepseek-ai/dsh-agent'
 import type { GenerateOptions, LlmCallConfig, Message, PreparedLlmCall } from '@deepseek-ai/dsh-llm'
 import {
+  HarnessError,
   LlmError,
   createAssistantMessage,
   errorChain,
@@ -31,6 +32,7 @@ import { canonicalHeader, headerEquals } from '@deepseek-ai/dsh-session'
 import { joinContextSections, renderContextSections, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import type { PromptAssembly } from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-session-projection'
+import { getToolRuntimeScheduler, type ToolRuntimeScheduler } from '@deepseek-ai/dsh-tools'
 import type { Context } from '@deepseek-ai/cordis'
 import { ReactLoopInbox } from './inbox.ts'
 import { RuntimeContextProjection } from './runtime-context.ts'
@@ -325,13 +327,13 @@ export class ReactLoopAgent implements Agent {
         turnEnds = { kind: 'aborted', reason: signal.reason as AgentCancelCause }
         throw error
       }
-      // Every failure is structured: an `LlmError` keeps its facts, anything
-      // else flattens to `errorChain` text under the `UNKNOWN` code.
+      // Provider failures retain their facts; other typed harness failures keep
+      // their actionable code alongside the complete error chain.
       turnEnds = {
         kind: 'error',
         error: error instanceof LlmError
           ? error.failure
-          : { message: errorChain(error), code: 'UNKNOWN' },
+          : { message: errorChain(error), code: error instanceof HarnessError ? error.code : 'UNKNOWN' },
       }
       this.throwError(error)
     } finally {
@@ -472,6 +474,26 @@ export class ReactLoopAgent implements Agent {
             ...live.replayState !== undefined ? { replayState: live.replayState } : {},
           },
         })
+        const toolCalls = message.content.filter(block => block.type === 'tool-call')
+        let scheduler: ToolRuntimeScheduler | undefined
+        try {
+          if (toolCalls.length > 0) scheduler = getToolRuntimeScheduler(this.loopCtx.tools)
+        } catch (error: unknown) {
+          // An unexecutable tool request stays observable without entering the
+          // provider history, where every assistant call requires a result.
+          try {
+            live.settle('assistant/attempt', () => this.session.append('assistant/attempt', {
+              turn, step, stream: live.stream,
+            }).seq)
+          } catch (settlementError: unknown) {
+            throw new AggregateError(
+              [error, settlementError],
+              'Tool scheduler unavailable and its assistant attempt could not be recorded',
+              { cause: error },
+            )
+          }
+          throw error
+        }
         live.settle(
           'assistant/message',
           () => this.session.append('assistant/message', {
@@ -484,10 +506,9 @@ export class ReactLoopAgent implements Agent {
         )
         if (finish.kind === 'max-tokens') return { kind: 'max-tokens' }
 
-        const toolCalls = message.content.filter(block => block.type === 'tool-call')
-        if (toolCalls.length === 0) return { kind: 'completed' }
+        if (scheduler === undefined) return { kind: 'completed' }
         const { concluded } = await executeToolCalls(
-          this.loopCtx, turn, step, toolCalls, signal,
+          this.loopCtx, scheduler, turn, step, toolCalls, signal,
           context => this.inbox.splice('next-step', this.inbox.nextStep.length, 0, [context]),
         )
         return concluded ? { kind: 'completed' } : null

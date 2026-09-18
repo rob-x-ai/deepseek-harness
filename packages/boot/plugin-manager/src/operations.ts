@@ -7,6 +7,7 @@ import { withFileLock, writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import {
   DEFAULT_PROFILE_BUNDLES, initProfile, PROFILE_TEMPLATES, readProfileManifest,
   resolveBundleDir, resolveProfileDir, loadOverlayPatches, type ProfileManifest,
+  assertSharedCorePackages,
 } from '@deepseek-ai/dsh-app-boot'
 import { scrubbedParentEnv } from '@deepseek-ai/dsh-subprocess'
 import type { PackageResult } from './types.ts'
@@ -157,7 +158,10 @@ export async function runProfilePnpm(
       truncated = Buffer.byteLength(diagnostic) > options.outputBytes
       output = Buffer.from(diagnostic).subarray(0, options.outputBytes)
     }
-    if (exitCode === 0 && options.activateNewBundles !== false) await reconcile(before, dir, context.installAnchor, options)
+    if (exitCode === 0) {
+      assertSharedCorePackages(context.installAnchor, dir)
+      if (options.activateNewBundles !== false) await reconcile(before, dir, context.installAnchor, options)
+    }
   } finally {
     await log.close()
   }

@@ -65,6 +65,9 @@ export {
   type PluginPackage,
   type PluginPackagesConfig,
 } from './profile-resolution/service.ts'
+export {
+  assertSharedCorePackages, DuplicateCorePackageError, type CorePackageLocation,
+} from './profile-resolution/core-packages.ts'
 
 /**
  * Resolve the config to boot. Replay swaps a `cordis.yml` basename for

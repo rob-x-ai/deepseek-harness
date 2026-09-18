@@ -208,6 +208,47 @@ it('reports blocked scripts after a failed installation and retries only after e
   expect(readProfileManifest('test', dir).dsh?.profile?.bundles).not.toContain('addon')
 })
 
+it('restores profile files and leaves a duplicate-core plugin inactive after package installation', async () => {
+  const script = `
+    import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+    import { join } from 'node:path'
+    const dir = process.cwd()
+    const addon = join(dir, 'node_modules', 'duplicate-addon')
+    const core = join(addon, 'node_modules', '@deepseek-ai', 'dsh-tools')
+    mkdirSync(core, { recursive: true })
+    writeFileSync(join(core, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-tools', version: '2.0.0' }))
+    writeFileSync(join(addon, 'package.json'), JSON.stringify({ name: 'duplicate-addon', version: '1.0.0',
+      dependencies: { '@deepseek-ai/dsh-tools': '2.0.0' }, dsh: { bundle: { patch: './cordis.patch.yml' } } }))
+    writeFileSync(join(addon, 'cordis.patch.yml'), JSON.stringify([{ insert: [{ id: 'duplicate-addon', name: './plugin.mjs' }] }]))
+    writeFileSync(join(addon, 'plugin.mjs'), 'throw new Error("duplicate plugin must not be evaluated")')
+    const manifest = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
+    manifest.dependencies['duplicate-addon'] = '1.0.0'
+    writeFileSync(join(dir, 'package.json'), JSON.stringify(manifest))
+    writeFileSync(join(dir, 'pnpm-lock.yaml'), 'modified by package manager\\n')
+  `
+  const { ctx, manager, dir, profile } = await fixture('live', false, undefined, {}, {
+    command: process.execPath, args: ['--input-type=module', '-e', script], env: {},
+  })
+  const core = join(profile.home, 'node_modules', '@deepseek-ai', 'dsh-tools')
+  mkdirSync(core, { recursive: true })
+  writeFileSync(join(core, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-tools', version: '1.0.0' }))
+  writeFileSync(profile.installAnchor, JSON.stringify({ name: 'installation', dependencies: { '@deepseek-ai/dsh-tools': '1' } }))
+  const before = readFileSync(join(dir, 'package.json'), 'utf8')
+  writeFileSync(join(dir, 'pnpm-lock.yaml'), 'original lockfile\n')
+
+  const result = await manager.installBundle('duplicate-addon')
+
+  expect(result).toMatchObject({ application: 'failed', stage: 'install', changed: false, error: { code: 'operation-error' } })
+  expect(result.error?.diagnostic).toContain('duplicate core package @deepseek-ai/dsh-tools')
+  expect(result.error?.diagnostic).toContain(core)
+  expect(result.error?.diagnostic).toContain(join(dir, 'node_modules', 'duplicate-addon', 'package.json'))
+  expect(readFileSync(join(dir, 'package.json'), 'utf8')).toBe(before)
+  expect(readFileSync(join(dir, 'pnpm-lock.yaml'), 'utf8')).toBe('original lockfile\n')
+  expect(existsSync(join(dir, 'node_modules', 'duplicate-addon', 'package.json'))).toBe(true)
+  expect([...ctx.loader.entries()].some(entry => entry.id === 'include:duplicate-addon')).toBe(false)
+  expect(ctx.get('managedProbe')).toBe(true)
+})
+
 it('retains approved policy and reports it as changed when the registry fails before adding a dependency', async () => {
   const { manager, dir } = await fixture()
   writeFileSync(join(dir, 'pnpm-workspace.yaml'), 'allowBuilds:\n  native: set this to true or false\n')

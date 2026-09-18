@@ -616,6 +616,8 @@ function assertOptionalEquivalent(
 
 /**
  * Install one profile generation on Node's default ESM and CommonJS resolvers.
+ * ESM fallback imports use canonical declaring-package paths so source loaders
+ * resolve configured plugins and their dependencies through the same modules.
  * @param generation - complete package table and profile scope.
  * @param behavior - enforce the generation, or verify a materialized generation.
  * @returns a registration that replaces the generation or restores the native methods.
@@ -690,7 +692,9 @@ export function installProfileResolution(
         if (cacheable && !(result instanceof Promise)) state.esm = result
         return result
       }
-      const routedParent = pathToFileURL(route.kind === 'fallback' ? route.entry.declarer : route.parent).href
+      // Source loaders distinguish workspace importers from node_modules. Resolve
+      // symlinked declarers before delegation so plugins share their dependencies.
+      const routedParent = pathToFileURL(route.kind === 'fallback' ? canonicalPath(route.entry.declarer) : route.parent).href
       if (behavior === 'enforce') {
         const previous = delegatedEsm
         delegatedEsm = { parent: routedParent, request }

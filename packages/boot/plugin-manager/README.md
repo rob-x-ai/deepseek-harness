@@ -114,11 +114,13 @@ Failures preserve completed steps and report the actual remaining state. Profile
 
 | Failed operation | Handling |
 |---|---|
-| Install: pnpm or bundle validation fails | Restore `package.json` and `pnpm-lock.yaml` as snapshotted before pnpm ran; files pnpm downloaded may remain. Report installation failure. |
+| Install: pnpm, core-package identity or bundle validation fails | Restore `package.json` and `pnpm-lock.yaml` as snapshotted before pnpm ran; files pnpm downloaded may remain. Report installation failure. |
 | Enable: saving selection or loading fails | Keep the installed dependency and any saved selection. Report enablement failure; allow repair, disablement or removal. |
 | Remove: any step fails | Stop at the failed step. Preserve completed changes, retain remaining dependencies for retry, and report removal failure. Do not re-enable the bundle. |
 
-Installation finishes after pnpm and bundle validation succeed; subsequent enablement failure does not undo installation. Removal proceeds in order: remove the bundle from `dsh.profile.bundles`, unload its runtime contributions, then run `pnpm remove`. A failed step prevents subsequent steps.
+Every successful pnpm operation checks the installed dependency graph for the [shared core-package identities](../app-boot/README.md#profiles) before bundle activation. A conflict reports both paths, versions and introducing manifests. The live manager restores its manifest and lockfile snapshots; the `dsh plugin` CLI retains pnpm’s changes on disk and reports failure before reconciling new bundle selections.
+
+Installation finishes after pnpm, core-package identity and bundle validation succeed; subsequent enablement failure does not undo installation. Removal proceeds in order: remove the bundle from `dsh.profile.bundles`, unload its runtime contributions, then run `pnpm remove`. A failed step prevents subsequent steps.
 
 Restoration rewrites only the two snapshotted files; user-authored patch configuration, application data, diagnostic logs and files pnpm downloaded remain untouched, and the next package operation prunes packages no manifest references.
 

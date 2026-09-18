@@ -4,6 +4,7 @@
  * @module @deepseek-ai/dsh-tools
  */
 
+import { createRequire } from 'node:module'
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { AnonymousEntries, NamedEntries, ScopedLayers, scopeOf, scopeTarget } from '@deepseek-ai/dsh-scope'
@@ -457,10 +458,56 @@ export interface ToolRuntimeScheduler {
 }
 
 /**
- * Scheduler entry point omitted from the generated named service API.
+ * Scheduler entry point shared across module re-evaluation in one JavaScript realm.
+ * Omitted from the generated named service API; matching keys do not make
+ * different package versions or other duplicated module state compatible.
  * @internal
  */
-export const TOOL_RUNTIME_SCHEDULER: unique symbol = Symbol('@deepseek-ai/dsh-tools.scheduler')
+export const TOOL_RUNTIME_SCHEDULER: unique symbol = Symbol.for('@deepseek-ai/dsh-tools.scheduler')
+
+/** Package evaluation that supplies or consumes the internal scheduler. @internal */
+export interface ToolRuntimeModuleInfo {
+  /** Evaluated module URL, including a reload query when present. */
+  readonly moduleUrl: string
+  /** Package manifest version belonging to that module. */
+  readonly version: string
+}
+
+const kToolRuntimeModule: unique symbol = Symbol.for('@deepseek-ai/dsh-tools.module')
+const { version: toolRuntimeVersion } = createRequire(import.meta.url)('../package.json') as { version: string }
+const toolRuntimeModule: ToolRuntimeModuleInfo = { moduleUrl: import.meta.url, version: toolRuntimeVersion }
+
+/** Missing scheduler at the loaded tool-service boundary. @internal */
+export class ToolRuntimeSchedulerUnavailableError extends HarnessError {
+  /** Package evaluation that attempted the scheduler lookup. */
+  readonly consumer = toolRuntimeModule
+
+  constructor(readonly producer: ToolRuntimeModuleInfo | undefined) {
+    const describe = (module: ToolRuntimeModuleInfo): string => `${module.version} (${module.moduleUrl})`
+    super(
+      `Tool runtime scheduler is unavailable. Consumer @deepseek-ai/dsh-tools: ${describe(toolRuntimeModule)}; `
+      + `provider: ${producer === undefined ? 'module metadata unavailable' : describe(producer)}. `
+      + 'Restart the Harness and check profile/plugin dependencies for duplicate or mismatched @deepseek-ai/dsh-tools packages.',
+      'TOOL_RUNTIME_SCHEDULER_UNAVAILABLE',
+    )
+  }
+}
+
+/**
+ * Capture the scheduler supplied by the loaded tool service before committing tool requests.
+ * @param tools - tool service visible to the caller.
+ * @returns the service's scheduler; retain this reference across one dispatch group.
+ * @throws ToolRuntimeSchedulerUnavailableError when the loaded service has no matching scheduler.
+ * @internal
+ */
+export function getToolRuntimeScheduler(tools: ToolRuntime): ToolRuntimeScheduler {
+  const scheduler = Reflect.get(tools, TOOL_RUNTIME_SCHEDULER) as ToolRuntimeScheduler | undefined
+  if (scheduler === undefined) {
+    const producer = Reflect.get(tools, kToolRuntimeModule) as ToolRuntimeModuleInfo | undefined
+    throw new ToolRuntimeSchedulerUnavailableError(producer)
+  }
+  return scheduler
+}
 
 /** Canonical error code for cancellation after a tool body was invoked. */
 export const TOOL_ABORTED = 'ABORTED'
@@ -827,6 +874,7 @@ export class ToolRuntime extends Service {
 
   constructor(ctx: Context, config: Config = {}) {
     super(ctx, 'tools')
+    Object.defineProperty(this, kToolRuntimeModule, { value: toolRuntimeModule })
     // The schema already defaulted an omitted mode; the ?? narrows the
     // optional-input type for direct (non-Loader) construction in tests.
     this.defaultMode = config.mode ?? 'native'
