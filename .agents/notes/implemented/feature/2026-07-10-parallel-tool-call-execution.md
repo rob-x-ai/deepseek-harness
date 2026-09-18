@@ -10,7 +10,7 @@ An assistant message may contain several sibling `tool-call` blocks. Running the
 
 Concurrency is a host scheduling concern, not model-facing tool metadata. The loop needs to decide which calls may overlap without hardcoding tool names or exposing scheduler policy in the JSON schema.
 
-The session log remains authoritative: every started call has an audit event, ordinary completion and cancellation pair calls with results, and model history observes committed results in the original call order regardless of completion order.
+The session log remains authoritative: every started call has an audit event, completion, cancellation, and scheduler failures pair committed assistant calls with results, and model history observes committed results in the original call order regardless of completion order.
 
 ## Decision
 
@@ -25,6 +25,8 @@ The unary classifier remains input-sensitive. A tool may classify a read-only op
 A tagged mode, rather than a public boolean scheduler API, keeps resource-aware variants representable without changing the classifier contract.
 
 ## Scheduling and ordering
+
+Before committing an assistant message containing tool requests, the loop captures the tool service's scheduler and retains that reference throughout the step. A missing scheduler produces a typed `TOOL_RUNTIME_SCHEDULER_UNAVAILABLE` failure and a log-only `assistant/attempt`; no unanswered tool requests enter provider history.
 
 The loop waits for the complete assistant message, parses every call once, creates a distinct `ToolExecution` for each call, and scans them in model order. Consecutive parallel calls form one group; every exclusive call forms a singleton group and an ordering barrier. Groups execute sequentially. Classification is lazy: the scheduler resolves the next call after each barrier and reclassifies every later call before replenishing a parallel pool. If a registry mutation makes that call exclusive, the current pool drains before the call starts as the next barrier.
 
@@ -46,7 +48,9 @@ Only dispatch and the tool body overlap. `tools/pre-execute` and `tools/post-exe
 
 Each started call appends `tool/call` immediately before its pre-execute gate. Completed dispatches occupy model-order slots, and a commit cursor appends `tool/result` and collects `additionalContexts` only when the next slot is ready. Live surfaces may show several pending calls, but results and post-tool context remain model-ordered.
 
-An abort before a group starts records no calls from that group. An abort during a group stops replenishment, waits for already-started calls, commits their results in order, drains accepted batch context after those results, and then ends the step through the existing abort path. Calls that never start have no audit event. An unexpected scheduler failure stops new dispatches, waits for every already-started dispatch to settle, and rethrows the first failure. Because that failure is terminal internal state rather than a tool outcome, the loop does not invent tool results for rejected or uncommitted calls.
+An abort stops replenishment, waits for already-started calls, commits their results in order, drains accepted batch context after those results, and then ends the step through the existing abort path. Remaining calls receive synthetic call/result pairs identifying cancellation before dispatch.
+
+An unexpected scheduler failure stops new dispatches and waits for every already-started dispatch to settle. The loop retains committed results and settles pending assistant calls in model order before rethrowing the original failure. Recorded calls receive `TOOL_OUTCOME_UNKNOWN`, warning that side effects may have occurred and external state must be checked before retrying; unstarted calls receive `TOOL_NOT_STARTED`. These error results keep provider history resumable without claiming a tool outcome the loop cannot establish. If recording recovery results fails, the aggregate error retains the original failure as its cause.
 
 PTC mode remains outside this scheduler because the model emits one native `run_code` call. `run_code` and its internal dispatch queue remain serial; native sibling calls in `mode: 'both'` use the normal scheduler.
 
@@ -66,7 +70,7 @@ Filesystem read relies on a narrow recorder exception: its synchronous observati
 
 ## Verification
 
-Unit coverage pins fail-closed classification, typed argument validation, grouping, barriers, live reclassification after registry replacement, the rolling cap, distinct execution objects, middleware order, ordered results and context, abort draining, and scheduler-failure quiescence. First-party tests pin each parallel declaration.
+Unit coverage pins fail-closed classification, typed argument validation, grouping, barriers, live reclassification after registry replacement, the rolling cap, distinct execution objects, middleware order, ordered results and context, abort draining, scheduler preflight and captured references, failure quiescence, ordered recovery results, and subsequent turns. First-party tests pin each parallel declaration.
 
 Snapshot coverage pins the visible multi-call transcript: pending calls may overlap while completed results remain model-ordered. PTC mode coverage pins its serial boundary. No provider-backed e2e is required because scheduling is deterministic loop behavior.
 
@@ -84,7 +88,7 @@ Snapshot coverage pins the visible multi-call transcript: pending calls may over
 
 **Expose staged methods or a scheduling waterfall.** Public `prepare` / `dispatch` / `finalize` methods or a `tools/execution-mode` event add extension surface before another consumer needs it. The loop uses an internal scheduler view, while `executionMode(exec)` leaves an insertion point for a policy hook.
 
-**Convert scheduler failures into tool results.** AgentLoop cannot determine whether a rejected dispatch invoked the tool body; ToolRuntime owns body-invocation state and typed tool outcomes. Internal scheduler failures therefore remain terminal instead of being reclassified as `ABORTED` results.
+**Treat scheduler failures as cancellation.** AgentLoop cannot determine whether a rejected dispatch invoked the tool body; ToolRuntime owns body-invocation state and typed tool outcomes. Internal scheduler failures therefore retain their terminal turn error. Recovery results distinguish unknown outcomes from unstarted calls rather than misclassifying internal failures as `ABORTED`.
 
 **Start calls while the model streams.** This may reduce latency further but changes assistant-message authority, replay, and call/result pairing. The scheduler starts only after the assistant message is complete.
 
@@ -96,7 +100,7 @@ Snapshot coverage pins the visible multi-call transcript: pending calls may over
 
 The design is fail-closed and simple for tool authors, but it cannot exploit concurrency whose safety depends on comparing siblings. A tool that opts in too broadly can expose latent shared-state races.
 
-Parallel calls may begin in cases where serial execution would have aborted before reaching them. The scheduler therefore records only started calls, drains them on abort, and never starts replacements after cancellation.
+Parallel calls may begin in cases where serial execution would have aborted before reaching them. The scheduler therefore distinguishes dispatched calls from synthetic skipped-call results, drains active work on abort, and never starts replacements after cancellation.
 
 Ordered commits may hold a fast result behind a slow earlier sibling. This preserves replay and model-history order while live surfaces still show pending progress.
 
@@ -104,4 +108,4 @@ Concurrent external calls can compete for quota or process capacity. Providers o
 
 Tool registration is a scheduling boundary. Registry mutations affect not-yet-started calls because the scheduler reclassifies after each barrier and before every pool replenishment. Already-started calls retain the scheduling decision under which they entered the pool.
 
-A terminal scheduler failure may leave recorded calls without results before the failed step closes. Waiting for live dispatches preserves quiescence without misreporting those internal failures as tool outcomes.
+A terminal scheduler failure preserves the first error while pairing pending assistant requests before the step closes. Waiting for live dispatches preserves quiescence; explicit unknown-outcome results keep continuation valid without encouraging blind retries of possible side effects.

@@ -1,0 +1,246 @@
+{
+  "first": {
+    "finalResponse": "",
+    "eventTypes": [
+      "agent/inbox/spliced",
+      "turn/start",
+      "agent/inbox/spliced",
+      "step/start",
+      "system/message",
+      "user/message",
+      "user/message",
+      "request/header",
+      "request/context",
+      "session/title",
+      "session-log-deepseek/delivery-accepted",
+      "assistant/attempt",
+      "step/end",
+      "turn/end"
+    ],
+    "attempt": {
+      "type": "assistant/attempt",
+      "seq": 14,
+      "time": 0,
+      "data": {
+        "turn": 1,
+        "step": 1,
+        "stream": [
+          {
+            "type": "chunk",
+            "time": 0,
+            "chunk": {
+              "type": "block-start",
+              "index": 0,
+              "blockType": "tool-call"
+            }
+          },
+          {
+            "type": "tool-call-chunks",
+            "time0": 0,
+            "index": 0,
+            "dt": [],
+            "id": "call-scheduler-unavailable",
+            "name": "snapshot_double",
+            "args": [
+              ""
+            ]
+          },
+          {
+            "type": "tool-call-chunks",
+            "time0": 0,
+            "index": 0,
+            "dt": [],
+            "id": "call-scheduler-unavailable",
+            "args": [
+              "{\"value\": 21}"
+            ]
+          },
+          {
+            "type": "chunk",
+            "time": 0,
+            "chunk": {
+              "type": "block-end",
+              "index": 0,
+              "block": {
+                "type": "tool-call",
+                "id": "call-scheduler-unavailable",
+                "name": "snapshot_double",
+                "arguments": "{\"value\": 21}"
+              }
+            }
+          },
+          {
+            "type": "chunk",
+            "time": 0,
+            "chunk": {
+              "type": "usage",
+              "usage": {
+                "inputTokens": 3,
+                "outputTokens": 3,
+                "totalTokens": 6
+              }
+            }
+          },
+          {
+            "type": "chunk",
+            "time": 0,
+            "chunk": {
+              "type": "finish",
+              "reason": {
+                "kind": "tool-calls"
+              },
+              "replayState": {
+                "response": {
+                  "kind": "deepseek-messages",
+                  "version": 1,
+                  "model": "smoke-model"
+                },
+                "blocks": [
+                  {
+                    "type": "tool-call"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    "turnEnd": {
+      "turn": 1,
+      "reason": {
+        "kind": "error",
+        "error": {
+          "code": "TOOL_RUNTIME_SCHEDULER_UNAVAILABLE"
+        }
+      }
+    }
+  },
+  "second": {
+    "finalResponse": "SCHEDULER_RECOVERY_OK",
+    "eventTypes": [
+      "agent/inbox/spliced",
+      "turn/start",
+      "agent/inbox/spliced",
+      "step/start",
+      "user/message",
+      "session-log-deepseek/delivery-accepted",
+      "assistant/message",
+      "step/end",
+      "turn/end"
+    ],
+    "turnEnd": {
+      "turn": 2,
+      "reason": {
+        "kind": "completed"
+      }
+    }
+  },
+  "third": {
+    "finalResponse": "",
+    "eventTypes": [
+      "agent/inbox/spliced",
+      "turn/start",
+      "agent/inbox/spliced",
+      "step/start",
+      "user/message",
+      "session-log-deepseek/delivery-accepted",
+      "assistant/message",
+      "tool/call",
+      "tool/result",
+      "tool/call",
+      "tool/result",
+      "step/end",
+      "turn/end"
+    ],
+    "toolResults": [
+      {
+        "turn": 3,
+        "step": 1,
+        "message": {
+          "source": {
+            "kind": "tool",
+            "callId": "call-scheduler-started"
+          },
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call-scheduler-started",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "The tool scheduler failed after this call was recorded, before a result could be saved. The call may have performed side effects. Verify external state before retrying."
+                }
+              ],
+              "isError": true
+            }
+          ],
+          "role": "user",
+          "id": "{{messageId}}"
+        },
+        "error": {
+          "name": "ToolOutcomeUnknownError",
+          "code": "TOOL_OUTCOME_UNKNOWN"
+        }
+      },
+      {
+        "turn": 3,
+        "step": 1,
+        "message": {
+          "source": {
+            "kind": "tool",
+            "callId": "call-scheduler-pending"
+          },
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call-scheduler-pending",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "The tool call was not started because the tool scheduler failed. Retry it if it is still needed."
+                }
+              ],
+              "isError": true
+            }
+          ],
+          "role": "user",
+          "id": "{{messageId}}"
+        },
+        "error": {
+          "name": "ToolNotStartedError",
+          "code": "TOOL_NOT_STARTED"
+        }
+      }
+    ],
+    "turnEnd": {
+      "turn": 3,
+      "reason": {
+        "kind": "error",
+        "error": {
+          "code": "UNKNOWN"
+        }
+      }
+    }
+  },
+  "fourth": {
+    "finalResponse": "SCHEDULER_PAIRING_OK",
+    "eventTypes": [
+      "agent/inbox/spliced",
+      "turn/start",
+      "agent/inbox/spliced",
+      "step/start",
+      "user/message",
+      "session-log-deepseek/delivery-accepted",
+      "assistant/message",
+      "step/end",
+      "turn/end"
+    ],
+    "turnEnd": {
+      "turn": 4,
+      "reason": {
+        "kind": "completed"
+      }
+    }
+  }
+}

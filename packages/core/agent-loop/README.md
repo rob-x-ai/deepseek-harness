@@ -124,6 +124,8 @@ Prompt admission uses the actual `prepareCall()` result, not the preceding `requ
 
 Final adapter selection, dispatch, and iteration failures arrive as terminal finishes and enter `agent/request-error`; a handling listener returns `{ kind: 'retry' }` without calling `next()`, while an unhandled failure is terminal. Middleware, result-processing, tool, and other extension failures remain thrown and close the turn directly — plugin failure ends the turn, not the loop. Undispatched model tool calls after cancellation receive synthetic `tool/call` plus `ABORTED_BEFORE_DISPATCH` result pairs. The [explicit-cancellation decision](../../../.agents/notes/implemented/architecture/2026-07-16-explicit-turn-cancellation.md) owns the signal lifecycle.
 
+The loop captures the scheduler before committing an assistant message containing tool requests. If the scheduler is unavailable, it records the stream as a log-only `assistant/attempt` and ends the turn with `TOOL_RUNTIME_SCHEDULER_UNAVAILABLE`; a later turn has no unanswered assistant calls. After requests are committed, an internal scheduler failure drains started work and supplies error results for every pending request before closing the turn. Previously recorded calls receive `TOOL_OUTCOME_UNKNOWN` with instructions to verify side effects before retrying; unstarted calls receive `TOOL_NOT_STARTED`. Completed results remain unchanged, and the original failure still ends the turn. Typed Harness errors retain their error codes.
+
 </details>
 
 -----

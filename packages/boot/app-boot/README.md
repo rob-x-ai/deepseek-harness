@@ -60,6 +60,8 @@ Inserted plugin names may be absolute filesystem paths, file URLs, or package sp
 
 Before mounting profile rows, the `dsh` launcher computes one immutable package-resolution generation from the installation and ordered bundle dependency graphs. Runtime mode is the default: it installs the generation through Node's ESM and CommonJS resolvers without creating fallback links. Plain Node callers of `runProfile` may explicitly select link mode to materialize the generation, dual mode to materialize and verify it, or runtime mode. Packaged executables and the Electron Host always use runtime mode.
 
+Profile launch and patch reload reject distinct physical copies of `@deepseek-ai/cordis`, `@deepseek-ai/dsh-scope`, `@deepseek-ai/dsh-session`, or `@deepseek-ai/dsh-tools` reachable through installation, profile, or selected-bundle dependencies. `DuplicateCorePackageError` carries code `DSH_DUPLICATE_CORE_PACKAGE`, both canonical package paths and versions, and their introducing manifests. Symlinks to one physical package are accepted; ordinary dependency versions may coexist. Repair the conflicting dependency or plugin peer requirements, reinstall or deduplicate, then restart.
+
 `sanitizeProfile(binName, profileDir, bundles)` provides filesystem recovery without loading plugins or parsing patches. Desktop uses it for native fatal recovery. Call it only after stopping the profile and excluding concurrent profile writes. It renames the profile’s `cordis.patch.yml` to a unique `.bak-<timestamp>` sibling and restores the supplied bundle list, preserving installed packages and other manifest fields. The timestamp is Unix time in milliseconds; collisions append an ordinal (`-1`, `-2`, …) without changing it. It returns the backup path, or `undefined` when no patch exists; missing profiles remain absent. Profile initialization recreates an empty patch on the next launch. The home-level patch is unchanged. Invalid profile JSON fails before mutation; later errors propagate and retain completed changes for retry.
 
 ### Previewing the effective configuration
@@ -173,6 +175,7 @@ Boot itself changes no request prefix. `addHarnessSourceSection` places its sour
 
 These limits describe when this boot library is a poor fit or needs special care. They are current package constraints, not a task backlog.
 
+- **Core-package inspection reads installed manifests** — it does not evaluate JavaScript, inspect arbitrary absolute plugin imports, or distinguish source and built evaluations within one physical package. Runtime capability checks remain necessary.
 - **Runtime resolution depends on Node internals** — supported Node versions require the native builtin-access addon and executable compatibility coverage. Only built Harness-owned Workers receive the generation bootstrap; third-party Workers and custom `vm` linkers keep native resolution.
 - **Snapshot replay swapping is basename-specific** — only a config ending in `cordis.yml` or `cordis.yaml` maps to the sibling `cordis.snapshot.yml`; custom config names require caller-managed selection.
 - **Environment discovery is launch-scoped** — `loadLayeredEnv` reads only the invocation directory and Harness home once; it does not search parents or follow a workspace selected later. `loadEnv` remains the one-directory helper for non-product bins.

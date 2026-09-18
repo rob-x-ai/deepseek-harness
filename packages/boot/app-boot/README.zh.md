@@ -60,6 +60,8 @@ profile 是同一套 dsh 安装提供不同应用界面的方式：`web`、`head
 
 挂载 profile 条目前，`dsh` launcher 会从安装依赖图与有序 bundle 依赖图计算一份不可变的 package resolution generation。默认使用 runtime 模式，将 generation 安装到 Node 的 ESM 与 CommonJS 解析器中，不创建 fallback 链接。普通 Node 中的 `runProfile` 调用方可以显式选择 link 模式以物化 generation，选择 dual 模式以物化并校验它，或选择 runtime 模式。打包可执行文件和 Electron Host 始终使用 runtime 模式。
 
+Profile 启动和 patch 重载会拒绝通过安装目录、profile 或已选组合包依赖可达的 `@deepseek-ai/cordis`、`@deepseek-ai/dsh-scope`、`@deepseek-ai/dsh-session` 或 `@deepseek-ai/dsh-tools` 的不同物理副本。`DuplicateCorePackageError` 携带错误码 `DSH_DUPLICATE_CORE_PACKAGE`、两个规范化包路径和版本，以及引入它们的 manifest。指向同一物理包的符号链接可用，普通依赖的多个版本可以共存。修正冲突依赖或插件的 peer 要求，重新安装或去重后重启。
+
 `sanitizeProfile(binName, profileDir, bundles)` 提供文件恢复，无需加载插件或解析 patch。Desktop 在原生致命错误恢复中调用它。调用前必须停止 profile 并排除并发 profile 写入。它将 profile 的 `cordis.patch.yml` 重命名为带唯一 `.bak-<timestamp>` 后缀的同目录备份，并恢复调用方指定的 bundle 列表，保留已安装包和其他 manifest 字段。时间戳为 Unix 毫秒数；同名备份已存在时追加序号（`-1`、`-2`、……），时间戳保持不变。返回值为备份路径；patch 不存在时返回 `undefined`，缺失的 profile 不会被创建。下次启动的 profile 初始化会重新创建空 patch。home 级 patch 不变。无效 profile JSON 在修改前报错；后续错误向调用方抛出，保留已完成的修改供重试。
 
 ### 预览生效配置
@@ -173,6 +175,7 @@ Loader 结算后，app-boot 在仅 optional 条目未激活时输出警告。如
 
 这些限制说明此启动库在何时不合适，或何时需要特别注意。它们是当前包约束，不是任务积压。
 
+- **核心包检查读取已安装 manifest**——它不执行 JavaScript，不检查任意绝对路径的插件导入，也不区分同一物理包的源码与构建产物求值。运行时能力检查仍然必要。
 - **运行时解析依赖 Node 内部机制**——受支持的 Node 版本需要 native builtin access addon 和可执行兼容验证。只有构建后的 Harness 自有 Worker 接收 generation bootstrap；第三方 Worker 与自定义 `vm` linker 保持原生解析。
 - **快照回放替换仅识别特定 basename**——只有以 `cordis.yml` 或 `cordis.yaml` 结尾的配置会映射到同级 `cordis.snapshot.yml`；自定义配置名称需要调用方自行选择。
 - **环境发现以启动为界**——`loadLayeredEnv` 只读取一次调用目录与 harness home 中的 `.env`；它不搜索父目录，也不跟随之后选择的 workspace。`loadEnv` 仍是非产品 bin 使用的单目录 helper。

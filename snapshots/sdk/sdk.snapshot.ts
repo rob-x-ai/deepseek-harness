@@ -63,6 +63,9 @@ import {
 import { SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 
 const corpusRoot = fileURLToPath(new URL('../', import.meta.url))
+const toolsPackageVersion = (JSON.parse(await readFile(
+  new URL('../../packages/core/tools/package.json', import.meta.url), 'utf8',
+)) as { version: string }).version
 
 const MINIMAL_SYSTEM_PROMPT = 'You are the environment-selected minimal software engineer.'
 const MINIMAL_BASH_DESCRIPTION = `Run commands in a bash shell
@@ -124,6 +127,9 @@ interface SdkAssertions {
 }
 
 const SDK_ASSERTIONS: Readonly<Record<string, SdkAssertions>> = {
+  'scheduler-unavailable-continue': {
+    patches: [fileURLToPath(new URL('./scheduler-unavailable-continue/runtime.cordis.yml', import.meta.url))],
+  },
   'tool-error-details': {
     patches: [fileURLToPath(new URL('./tool-error-details/runtime.cordis.yml', import.meta.url))],
     expectedFinalResponse: 'ERROR_DETAILS_OK',
@@ -391,6 +397,12 @@ function normalizeResult(result: RunResult, ctx: NormalizeContext): string {
     sessionId: result.sessionId,
     finalResponse: result.finalResponse,
   })}\n`, ctx)
+}
+
+/** Preserve scheduler diagnostics while replacing the checkout's path and release version. */
+function normalizeSchedulerModuleUrl(text: string): string {
+  return text.replaceAll(new URL('../../packages/core/tools/lib/index.js', import.meta.url).href, '{{toolsModule}}')
+    .replaceAll(`${toolsPackageVersion} ({{toolsModule}})`, '{{toolsVersion}} ({{toolsModule}})')
 }
 
 interface JsonObject {
@@ -806,8 +818,22 @@ describe('TypeScript SDK snapshots over the jsonrpc runtime', () => {
           ? files.map((_, index) => writerSnapshotName(index)).sort() : [])
       }
       const { results, notifications, observedMethods, logs, initialWorkspace, finalWorkspace, cwd } = await runScenario(scenario)
+      if (scenario.name === 'scheduler-unavailable-continue') {
+        expect(results).toHaveLength(2)
+        const first = results[0]!
+        expect(first.events.filter(event => event.type === 'assistant/attempt')).toHaveLength(1)
+        expect(first.events.some(event => ['assistant/message', 'tool/call', 'tool/result'].includes(event.type))).toBe(false)
+        expect(first.events.find(event => event.type === 'turn/end')).toMatchObject({ data: {
+          reason: { kind: 'error', error: { code: 'TOOL_RUNTIME_SCHEDULER_UNAVAILABLE' } },
+        } })
+        expect(results[1]!.finalResponse).toBe('SCHEDULER_RECOVERY_OK')
+        expect(results[1]!.events.find(event => event.type === 'turn/end'))
+          .toMatchObject({ data: { reason: { kind: 'completed' } } })
+      }
       const ordered = orderLogs(
-        logs,
+        scenario.name === 'scheduler-unavailable-continue'
+          ? logs.map(log => ({ ...log, content: normalizeSchedulerModuleUrl(log.content) }))
+          : logs,
         recording ? logs.length : files.length,
         assertions.dshSdkChild !== undefined,
       )
@@ -908,7 +934,9 @@ describe('TypeScript SDK snapshots over the jsonrpc runtime', () => {
       const finalResult = results.at(-1)
       if (hasWireGoldens) {
         if (finalResult === undefined) throw new Error(`${scenario.name}: SDK wire golden has no run result`)
-        const normalizedNotifications = normalizeNotifications(notifications, actualContext)
+        const normalizedNotifications = scenario.name === 'scheduler-unavailable-continue'
+          ? normalizeSchedulerModuleUrl(normalizeNotifications(notifications, actualContext))
+          : normalizeNotifications(notifications, actualContext)
         const normalizedResult = normalizeResult(finalResult, actualContext)
         if (recording || refreshing) {
           await writeFile(notificationsExpectedPath, normalizedNotifications)

@@ -1,0 +1,174 @@
+[
+  {
+    "model": "smoke-model",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Exercise a missing tool scheduler before continuing this session."
+          },
+          {
+            "type": "text",
+            "text": "Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\nCurrent DSH file policy: danger-full-access. The DSH file sandbox does not restrict file modifications by available operations.\n\nApproval prompts are disabled in this session: actions that require approval are rejected automatically — do not request sandbox escalation (do not set `sandbox_permissions`)."
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "model": "smoke-model",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Exercise a missing tool scheduler before continuing this session."
+          },
+          {
+            "type": "text",
+            "text": "Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\nCurrent DSH file policy: danger-full-access. The DSH file sandbox does not restrict file modifications by available operations.\n\nApproval prompts are disabled in this session: actions that require approval are rejected automatically — do not request sandbox escalation (do not set `sandbox_permissions`)."
+          },
+          {
+            "type": "text",
+            "text": "Continue this session and reply with SCHEDULER_RECOVERY_OK."
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "model": "smoke-model",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Exercise a missing tool scheduler before continuing this session."
+          },
+          {
+            "type": "text",
+            "text": "Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\nCurrent DSH file policy: danger-full-access. The DSH file sandbox does not restrict file modifications by available operations.\n\nApproval prompts are disabled in this session: actions that require approval are rejected automatically — do not request sandbox escalation (do not set `sandbox_permissions`)."
+          },
+          {
+            "type": "text",
+            "text": "Continue this session and reply with SCHEDULER_RECOVERY_OK."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "SCHEDULER_RECOVERY_OK"
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Exercise a scheduler failure while preparing two tool calls."
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "model": "smoke-model",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Exercise a missing tool scheduler before continuing this session."
+          },
+          {
+            "type": "text",
+            "text": "Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\nCurrent DSH file policy: danger-full-access. The DSH file sandbox does not restrict file modifications by available operations.\n\nApproval prompts are disabled in this session: actions that require approval are rejected automatically — do not request sandbox escalation (do not set `sandbox_permissions`)."
+          },
+          {
+            "type": "text",
+            "text": "Continue this session and reply with SCHEDULER_RECOVERY_OK."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "SCHEDULER_RECOVERY_OK"
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Exercise a scheduler failure while preparing two tool calls."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "call-scheduler-started",
+            "name": "snapshot_double",
+            "input": {
+              "value": 21
+            }
+          },
+          {
+            "type": "tool_use",
+            "id": "call-scheduler-pending",
+            "name": "snapshot_double",
+            "input": {
+              "value": 22
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "call-scheduler-started",
+            "content": [
+              {
+                "type": "text",
+                "text": "The tool scheduler failed after this call was recorded, before a result could be saved. The call may have performed side effects. Verify external state before retrying."
+              }
+            ],
+            "is_error": true
+          },
+          {
+            "type": "tool_result",
+            "tool_use_id": "call-scheduler-pending",
+            "content": [
+              {
+                "type": "text",
+                "text": "The tool call was not started because the tool scheduler failed. Retry it if it is still needed."
+              }
+            ],
+            "is_error": true
+          },
+          {
+            "type": "text",
+            "text": "Continue after the failed tool batch and reply with SCHEDULER_PAIRING_OK."
+          }
+        ]
+      }
+    ]
+  }
+]
